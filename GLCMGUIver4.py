@@ -1,3 +1,5 @@
+import timeit
+
 import cv2 # библиотека компьютерного зрения
 import numpy # расширение языка Python, добавляющее поддержку больших многомерных массивов и матриц, вместе с большой библиотекой высокоуровневых математических функций для операций с этими массивами.
 import matplotlib # библиотека для визуализации данных двумерной графикой
@@ -10,9 +12,14 @@ import pandas as pd # популярный инструментарий анал
 import matplotlib.pylab as plt # набор функций командного стиля, которые заставляют matplotlib работать как MATLAB.
 import skimage.segmentation # модуль сегментации scikit-image
 import skimage.filters.edges # модуль детектора границ
+import tensorflow as tf
+import pathlib
 from PyQt5 import QtCore, QtWidgets, uic # QTCore - Модуль содержит основные классы, в том числе цикл событий и механизм сигналов и слотов Qt. Вспомогательные модули, для работы с виджетами и ui-фалйами, сгенерированными в дизайнере
-from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QApplication, QScrollArea, QGridLayout, QWidget, QLabel, QScrollBar # подключение виджетов
+from PyQt5.QtWidgets import QMenuBar, QMenu, QFileDialog, QGraphicsView, QApplication, QScrollArea, QGridLayout, \
+    QWidget, QLabel, QScrollBar, QGraphicsScene  # подключение виджетов
+from PyQt5.QtCore import QDir
 from PyQt5.QtGui import QPixmap, QImage # подключение модуля для работы с изображениями
+from cv2 import blur
 from sklearn.pipeline import make_pipeline # подключение сокращения для конструктора конвейера
 from skimage.color import rgb2lab # модуль для преобразования из rgb в lab
 from sklearn.preprocessing import StandardScaler # подключение преобразователя данных
@@ -20,12 +27,13 @@ from skimage.feature import greycomatrix, greycoprops # подключение �
 from sklearn.svm import SVC # подключения классификатора SVC
 from matplotlib import pyplot as plt # Pyplot предоставляет интерфейс конечного автомата для базовой библиотеки построения графиков в matplotlib.
 from tkinter import * # пакет для Python, предназначенный для работы с библиотекой Tk
-
-import tensorflow as tf
-import pathlib
+from PIL import Image, ImageDraw
 from tensorflow.keras import layers
 from tensorflow import keras
 from tensorflow.keras.models import Sequential
+
+
+
 
 matplotlib.use('QT5Agg')
 
@@ -35,6 +43,7 @@ class MyWindow(QtWidgets.QMainWindow):
         self.ui=uic.loadUi('GLCM.ui', self) # Импорт интерфейса
         self.addFunctions() # Вызов функций
 
+
     def addFunctions(self):
         # Menu
         self.menuBar = QMenuBar(self)
@@ -43,9 +52,12 @@ class MyWindow(QtWidgets.QMainWindow):
         self.menuBar.addMenu(fileMenu)
         fileMenu.addAction('Открыть',self.action_clicked)
         fileMenu.addAction('Сохранить', self.action_clicked)
+        fileMenu.addAction('Загрузить обучающую выборку', self.action_clicked)
+        fileMenu.addAction('Загрузить тестовую выборку', self.action_clicked)
         self.listWidget.itemClicked.connect(self.listitemclicked) # load image
+        self.pushButton_deletehair.clicked.connect(lambda: self.removehair())
+        self.pushButton_segmentation.clicked.connect(lambda: self.segmentation())  # Сегментация
         self.pushButton.clicked.connect(lambda: self.glcm()) # GLCM
-        self.pushButton_segmentation.clicked.connect(lambda: self.segmentation()) # Сегментация
         self.pushButton_deleteBackground.clicked.connect(lambda: self.deletebackground()) # Удаление фона
         self.Buttontest.clicked.connect(lambda: self.test()) # Тестовая функция
         self.info_button.clicked.connect(lambda: self.informativ()) # Информативность
@@ -53,6 +65,7 @@ class MyWindow(QtWidgets.QMainWindow):
         self.zoom_in_button.clicked.connect(lambda: self.on_zoom_in()) # Увеличить
         self.zoom_out_button.clicked.connect(lambda: self.on_zoom_out()) # Уменьшить
         self.SVM_button.clicked.connect(lambda: self.SVM()) # SVM Классификатор
+        self.pushButton_2.clicked.connect(lambda: self.glcm_all())
         # self.KNN_button.clicked.connect(lambda: self.KNN()) # KNN Классификатор
         # self.NN_button.clicked.connect(lambda: self.NN())
 
@@ -75,59 +88,136 @@ class MyWindow(QtWidgets.QMainWindow):
                 f.close()
             except FileNotFoundError:
                 print("No such file")
+        elif action.text() == "Загрузить обучающую выборку":
+            try:
+                self.train_papka=QFileDialog.getExistingDirectory(self) # Путь к папке содержащей папки классов
+                print(self.train_papka)
+                self.pred_train_papka=os.path.dirname(self.train_papka) # Путь к папке куда сохранять .csv
+                print(self.pred_train_papka)
+            except NotADirectoryError:
+                print("No such directory")
+        elif action.text() == "Загрузить тестовую выборку":
+            try:
+                self.test_papka=QFileDialog.getExistingDirectory(self) # Путь к папке содержащей папки классов
+                print(self.test_papka)
+                self.pred_test_papka=os.path.dirname(self.test_papka) # Путь к папке куда сохранять .csv
+                print(self.pred_test_papka)
+            except NotADirectoryError:
+                print("No such directory")
+
 
     def listitemclicked(self): # Выбор из списка изображения и отображение на label
 
         self.file_path = self.listWidget.selectedItems()[0].text()  # Путь к выбранному файлу
-        for index, link in enumerate(self.files_path):
-            if self.file_path == link:
-                self.file_index=index
+        # for index, link in enumerate(self.files_path):
+        #     if self.file_path == link:
+        #         self.file_index=index
 
-        # Отображение изображения на label
-        self.pixmap=QPixmap(self.file_path)
-        self.ui.label.setPixmap(self.pixmap)
-        self.ui.label.repaint()
+        self.scene = QGraphicsScene(self.graphicsView)
+        self.pixmap = QPixmap(self.file_path)
+        self.scene.addPixmap(self.pixmap)
+        self.graphicsView.setScene(self.scene)
+        self.scene_2 = QGraphicsScene(self.graphicsView_2)
         self.pixmap2 = QPixmap(self.file_path)
-        self.ui.dst.setPixmap(self.pixmap2)
-        self.ui.dst.repaint()
+        self.scene_2.addPixmap(self.pixmap2)
+        self.graphicsView_2.setScene(self.scene_2)
 
         self.scale = 1
-        print(self.file_path)
+
 
     def on_zoom_in(self): # Увеличение изображения
+        self.scene.clear()
+        self.scene_2.clear()
         self.scale *= 2
         self.resize_image()
 
     def on_zoom_out(self): # Уменьшение изображения
+        self.scene.clear()
+        self.scene_2.clear()
         self.scale /= 2
         self.resize_image()
 
     def resize_image(self): # Изменение изображения
         size = self.pixmap.size()
         scaled_pixmap = self.pixmap.scaled(self.scale * size)
-        self.label.setPixmap(scaled_pixmap)
+        self.scene.addPixmap(scaled_pixmap)
         size = self.pixmap2.size()
         scaled_pixmap = self.pixmap2.scaled(self.scale * size)
-        self.dst.setPixmap(scaled_pixmap)
+        self.scene_2.addPixmap(scaled_pixmap)
+    def removehair(self):
 
+
+        image = cv2.imread(self.file_path)
+        image_resize = cv2.resize(image, (1800, 1200))
+        # plt.subplot(2,3,1)
+        # Convert the original image to grayscale
+        # plt.imshow(cv2.cvtColor(image_resize, cv2.COLOR_BGR2RGB))
+        # plt.axis('off')
+        # plt.title('Original : ' )
+
+        grayScale = cv2.cvtColor(image_resize, cv2.COLOR_RGB2GRAY)
+        # plt.subplot(2,3,2)
+        # plt.imshow(grayScale)
+        # plt.axis('off')
+        # plt.title('GrayScale : ' )
+
+        # Kernel for the morphological filtering
+        kernel = cv2.getStructuringElement(1, (17, 17))
+
+        # Perform the blackHat filtering on the grayscale image to find the hair countours
+        blackhat = cv2.morphologyEx(grayScale, cv2.MORPH_BLACKHAT, kernel)
+        # plt.subplot(2,3,3)
+        # plt.imshow(blackhat)
+        # plt.axis('off')
+        # plt.title('blackhat : ' )
+
+        # intensify the hair countours in preparation for the inpainting
+        ret, threshold = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
+        # plt.subplot(2,3,4)
+        # plt.imshow(threshold)
+        # plt.axis('off')
+        # plt.title('threshold : ')
+
+        # inpaint the original image depending on the mask
+        final_image = cv2.inpaint(image_resize, threshold, 1, cv2.INPAINT_TELEA)
+        # plt.subplot(2,3,5)
+        # plt.imshow(cv2.cvtColor(final_image, cv2.COLOR_BGR2RGB))
+        cv2.imwrite("withouthair.png", final_image)
+        self.scene_2 = QGraphicsScene(self.graphicsView_2)
+        self.pixmap2 = QPixmap('withouthair.png')
+        self.scene_2.addPixmap(self.pixmap2)
+        self.file_path = 'withouthair.png'
+        # plt.axis('off')
+        # plt.title('final_image : ' )
+        # plt.plot()
+        # plt.show()
 
     def segmentation(self): # Сегментация
 
+
+        # img = cv2.imread('withouthair.png')
+        # gray = cv2.imread('withouthair.png',0)
         img = cv2.imread(self.file_path)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.imread(self.file_path,0)
+
 
         ## (2) Threshold
-        th, threshed = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+        th, threshed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU )
 
-        ## (3) Find the first contour that greate than 100, locate in centeral region
-        ## Adjust the parameter when necessary
+        ## (3) Find the first contour greater than 100 located in the central area
         cnts = cv2.findContours(threshed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[-2]
         cnts = sorted(cnts, key=cv2.contourArea)
+        # Клетки
+        # H, W = img.shape[:2]
+        # for cnt in cnts:
+        #     x, y, w, h = cv2.boundingRect(cnt)
+        #     if cv2.contourArea(cnt) > 100 and (1 < w / h < 2) and (W / 2 < x + w // 2 < W * 1 / 2) and (H / 1 < y + h // 2 < H * 1 / 2):
+        #         break
+
         H, W = img.shape[:2]
         for cnt in cnts:
             x, y, w, h = cv2.boundingRect(cnt)
-            if cv2.contourArea(cnt) > 100 and (1 < w / h < 2) and (W / 2 < x + w // 2 < W * 1 / 2) and (
-                    H / 1 < y + h // 2 < H * 1 / 2):
+            if cv2.contourArea(cnt) > 100 and (1 < w / h < 2) and (W / 2 < x + w // 2 < W * 1 / 2) and (H / 1 < y + h // 2 < H * 1 / 2):
                 break
 
         ## (4) Create mask and do bitwise-op
@@ -137,18 +227,44 @@ class MyWindow(QtWidgets.QMainWindow):
 
         ## Display it
         cv2.imwrite("dst.png", dst)
+        self.scene_2 = QGraphicsScene(self.graphicsView_2)
         self.pixmap2 = QPixmap('dst.png')
-        self.ui.dst.setPixmap(self.pixmap2)
-        self.ui.dst.repaint()
+        self.scene_2.addPixmap(self.pixmap2)
+        self.graphicsView_2.setScene(self.scene_2)
+        self.file_path='dst.png'
+        # self.scene_2.clear()
+
+        # ret1, th1 = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+        # # Otsu's thresholding
+        # ret2, th2 = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # # Otsu's thresholding after Gaussian filtering
+        # blur = cv2.GaussianBlur(img, (5, 5), 0)
+        # ret3, th3 = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # # plot all the images and their histograms
+        # images = [img, 0, th1,
+        #           img, 0, th2,
+        #           blur, 0, th3]
+        # titles = ['Original Noisy Image', 'Histogram', 'Global Thresholding (v=127)',
+        #           'Original Noisy Image', 'Histogram', "Otsu's Thresholding",
+        #           'Gaussian filtered Image', 'Histogram', "Otsu's Thresholding"]
+        # for i in range(3):
+        #     plt.subplot(3, 3, i * 3 + 1), plt.imshow(images[i * 3], 'gray')
+        #     plt.title(titles[i * 3]), plt.xticks([]), plt.yticks([])
+        #     plt.subplot(3, 3, i * 3 + 2), plt.hist(images[i * 3].ravel(), 256)
+        #     plt.title(titles[i * 3 + 1]), plt.xticks([]), plt.yticks([])
+        #     plt.subplot(3, 3, i * 3 + 3), plt.imshow(images[i * 3 + 2], 'gray')
+        #     plt.title(titles[i * 3 + 2]), plt.xticks([]), plt.yticks([])
+        # plt.show()
+
 
 
     def deletebackground(self): # Удаления фона
 
         img = cv2.imread(self.file_path)
-        print(img)
+        # print(img)
 
         # convert to gray
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # threshold
         thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY)[1]
@@ -179,15 +295,14 @@ class MyWindow(QtWidgets.QMainWindow):
         # put mask into alpha channel of input
         self.result = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
         self.result[:, :, 3] = mask
-        print(self.result)
+        # print(self.result)
         # save output
         cv2.imwrite('withoutBackground.png', self.result)
 
         # Display various images to see the steps
-        pixmap = QPixmap('withoutBackground.png')
-        self.ui.label.setPixmap(pixmap)
-        self.ui.label.repaint()
-        # cv2.imshow('result', self.result)
+        self.scene_2.clear()
+        self.pixmap2 = QPixmap('withoutBackground.png')
+        self.scene_2.addPixmap(self.pixmap2)
 
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -210,10 +325,18 @@ class MyWindow(QtWidgets.QMainWindow):
         mat = np.matrix(head)
         df = pd.DataFrame(mat)
         df.to_csv('glcm_all.csv', mode='a', header=False, index=False, float_format="%.5f", sep=';') # Указание кол-ва признаков
+
         for i in range(num):
-            self.file_path = self.files_path[i] # путь
-            # self.deletebackground()
+            self.file_path=self.files_path[i]
+            print(self.file_path)
+            # self.scene = QGraphicsScene(self.graphicsView)
+            # self.pixmap = QPixmap(self.file_path)
+            # self.scene.addPixmap(self.pixmap)
+            # self.graphicsView.setScene(self.scene)
+            # self.removehair()
+            self.segmentation()
             np.set_printoptions(edgeitems=1000) # для отображения полной матрицы изображения в окне вывода
+            self.file_path = 'dst.png'
             self.grayscale = cv2.imread(self.file_path)  # Преобразование в оттенки серого
             color = self.ui.color.currentIndex()
             # Сохранение и отображение канала цвета
@@ -221,29 +344,29 @@ class MyWindow(QtWidgets.QMainWindow):
                 self.grayscale[:, :, 0] = 0
                 self.grayscale[:, :, 1] = 0
                 cv2.imwrite('r.bmp', self.grayscale)
+                self.scene_2.clear()
                 self.pixmap2 = QPixmap('r.bmp')
-                self.ui.dst.setPixmap(self.pixmap2)
-                self.ui.dst.repaint()
+                self.scene_2.addPixmap(self.pixmap2)
             elif color == 1:
                 self.grayscale[:, :, 0] = 0
                 self.grayscale[:, :, 2] = 0
                 cv2.imwrite('g.bmp', self.grayscale)
+                self.scene_2.clear()
                 self.pixmap2 = QPixmap('g.bmp')
-                self.ui.dst.setPixmap(self.pixmap2)
-                self.ui.dst.repaint()
+                self.scene_2.addPixmap(self.pixmap2)
             elif color == 2:
                 self.grayscale[:, :, 1] = 0
                 self.grayscale[:, :, 2] = 0
                 cv2.imwrite('b.bmp', self.grayscale)
+                self.scene_2.clear()
                 self.pixmap2 = QPixmap('b.bmp')
-                self.ui.dst.setPixmap(self.pixmap2)
-                self.ui.dst.repaint()
+                self.scene_2.addPixmap(self.pixmap2)
             elif color == 3:
                 self.grayscale = cv2.imread(self.file_path, 0)
                 cv2.imwrite('gray.bmp', self.grayscale)
+                self.scene_2.clear()
                 self.pixmap2 = QPixmap('gray.bmp')
-                self.ui.dst.setPixmap(self.pixmap2)
-                self.ui.dst.repaint()
+                self.scene_2.addPixmap(self.pixmap2)
 
             # Извлечение канала цвета
             self.grayscale=cv2.imread(self.file_path) # Преобразование в оттенки серого
@@ -390,10 +513,14 @@ class MyWindow(QtWidgets.QMainWindow):
             df4.to_csv('texture\Asm.csv', mode='a', header=False, index=[1, 2, 3, 4, 5], float_format="%.5f", sep=';')
             df5.to_csv('texture\Energy.csv', mode='a', header=False, index=[1, 2, 3, 4, 5], float_format="%.5f", sep=';')
             df6.to_csv('texture\Correlation.csv', mode='a', header=False, index=[1, 2, 3, 4, 5], float_format="%.5f", sep=';')
-
+            self.scene_2 = QGraphicsScene(self.graphicsView_2)
+            self.pixmap2 = QPixmap(self.file_path)
+            self.scene_2.addPixmap(self.pixmap2)
+            self.graphicsView_2.setScene(self.scene_2)
 
 
         #Отображение на графиках
+        plt.clf()
         plt.subplot(2, 3, 1)
         plt.grid(axis='both')
         plt.title("Контраст")
@@ -430,12 +557,74 @@ class MyWindow(QtWidgets.QMainWindow):
         plt.xticks([i for i in range(0, max(Distances + 1))])
         plt.plot(Distances, Correlation, marker='o')
 
+
         self.Anglelegend = [0, 45, 90, 135]
 
         plt.figlegend(self.Anglelegend)
         plt.show()
         self.features_describe()
 
+    def glcm_all(self):
+        path = self.train_papka
+        list = os.listdir(self.train_papka)
+        print(list)
+        for k in range(10):
+            my_file = open(f"glcm_train{k}.csv", "w+")
+            my_file.close()
+            file_csv_path = f'glcm_train{k}.csv'
+            os.remove(file_csv_path)
+        file_count = len(list)
+        my_file = open("glcm_all.csv", "w+")
+        my_file.close()
+        file_csv_path = 'glcm_all.csv'
+        os.remove(file_csv_path)
+        print(file_count)
+        for k in range(file_count):
+            papka = []
+            for p in os.listdir(path):
+                full_path = os.path.join(path, p).replace('/','\\')
+                papka += [full_path]
+            print(papka)
+            self.files_path = []
+            for l in os.listdir(papka[k]):
+                full_path = os.path.join(papka[k], l)
+                self.files_path += [full_path]
+            print(self.files_path)
+            self.glcm()
+            file_oldname = os.path.join(self.pred_train_papka, "glcm_all.csv")
+            file_newname_newfile = os.path.join(self.pred_train_papka,f"glcm_train{k}.csv")
+            os.rename(file_oldname, file_newname_newfile)
+
+        path = self.test_papka
+        list = os.listdir(self.test_papka)
+        folder = os.path.realpath(path)
+        print(folder)
+        for k in range(10):
+            my_file = open(f"glcm_test{k}.csv", "w+")
+            my_file.close()
+            file_csv_path = f'glcm_test{k}.csv'
+            os.remove(file_csv_path)
+        file_count = len(list)
+        my_file = open("glcm_all.csv", "w+")
+        my_file.close()
+        file_csv_path = 'glcm_all.csv'
+        os.remove(file_csv_path)
+        print(file_count)
+        for k in range(file_count):
+            papka = []
+            print(path)
+            for p in os.listdir(path):
+                full_path = os.path.join(path, p).replace('/','\\')
+                papka += [full_path]
+            print(papka)
+            self.files_path = []
+            for l in os.listdir(papka[k]):
+                full_path = os.path.join(papka[k], l)
+                self.files_path += [full_path]
+            self.glcm()
+            file_oldname = os.path.join(self.pred_test_papka, "glcm_all.csv")
+            file_newname_newfile = os.path.join(self.pred_test_papka, f"glcm_test{k}.csv")
+            os.rename(file_oldname, file_newname_newfile)
 
 
     def features_describe(self): # Сохранение описания значений таблицы (mean,std)
@@ -476,12 +665,11 @@ class MyWindow(QtWidgets.QMainWindow):
         self.rass = self.spinBox.value()  # Расстояние смежности
         self.rassipriznaki = 6 * self.rass  # Расстояние смежности * 6 признаков
         # Загрузка данных
-        features = pd.read_csv('glcm_train1.csv',delimiter=';')
+        features = pd.read_csv('glcm_train0.csv',delimiter=';')
         del features['0']
-        print(features)
         mean1=features.describe().loc[['mean']]
         std1=features.describe().loc[['std']]
-        features = pd.read_csv('glcm_train2.csv', delimiter=';')
+        features = pd.read_csv('glcm_train1.csv', delimiter=';')
         del features['0']
         mean2 = features.describe().loc[['mean']]
         std2 = features.describe().loc[['std']]
@@ -489,7 +677,6 @@ class MyWindow(QtWidgets.QMainWindow):
         c=numpy.array(abs(mean1-mean2))
         z=numpy.array(1.6*(std1+std2))
         self.informativeness=numpy.divide(c,z)
-        print(self.informativeness)
         infocsv=self.informativeness.reshape(4,self.rassipriznaki)
         df = pd.DataFrame(infocsv)
         df.to_csv('informativness.csv', header=False, index=[1, 2, 3, 4, 5], float_format="%.5f", sep=';')
@@ -500,31 +687,60 @@ class MyWindow(QtWidgets.QMainWindow):
         self.std2=numpy.array(std2)
 
         #Отоброжение на графиках
-        plt.subplot(2, 3, 1)
-        plt.grid(axis='both')
-        plt.title("Зависимость среднего 1 класса от расстояния смежности")
-        plt.plot(head, self.mean1[0], marker='o')
-        plt.show()
-        plt.subplot(2, 3, 2)
-        plt.grid(axis='both')
-        plt.title("Зависимость среднего 2 класса от расстояния смежности")
-        plt.plot(head, self.mean2[0], marker='o')
-        plt.show()
-        plt.subplot(2, 3, 4)
-        plt.grid(axis='both')
-        plt.title("Зависимость среднеквадратического отклонения 1 класса\n от расстояния смежности")
-        plt.plot(head, self.std1[0], marker='o')
-        plt.show()
-        plt.subplot(2, 3, 5)
-        plt.grid(axis='both')
-        plt.title("Зависимость среднеквадратического отклонения 2 класса\n от расстояния смежности")
-        plt.plot(head, self.std2[0], marker='o')
-        plt.show()
-        plt.subplot(2, 3, 6)
+        # plt.subplot(2, 3, 1)
+        # plt.grid(axis='both')
+        # plt.title("Зависимость среднего 1 класса от расстояния смежности")
+        # plt.plot(head, self.mean1[0], marker='o')
+        # plt.show()
+        # plt.subplot(2, 3, 2)
+        # plt.grid(axis='both')
+        # plt.title("Зависимость среднего 2 класса от расстояния смежности")
+        # plt.plot(head, self.mean2[0], marker='o')
+        # plt.show()
+        # plt.subplot(2, 3, 4)
+        # plt.grid(axis='both')
+        # plt.title("Зависимость среднеквадратического отклонения 1 класса\n от расстояния смежности")
+        # plt.plot(head, self.std1[0], marker='o')
+        # plt.show()
+        # plt.subplot(2, 3, 5)
+        # plt.grid(axis='both')
+        # plt.title("Зависимость среднеквадратического отклонения 2 класса\n от расстояния смежности")
+        # plt.plot(head, self.std2[0], marker='o')
+        # plt.show()
+        x=4*self.spinBox.value()
+        ar1=np.arange(0,x)
+        ar2=np.arange(x,2*x)
+        ar3=np.arange(2*x,3*x)
+        ar4=np.arange(3*x,4*x)
+        ar5=np.arange(4*x,5*x)
+        ar6=np.arange(5*x,6*x)
+        df1 = self.informativeness[0][ar1]
+        df2 = self.informativeness[0][ar2]
+        df3 = self.informativeness[0][ar3]
+        df4 = self.informativeness[0][ar4]
+        df5 = self.informativeness[0][ar5]
+        df6 = self.informativeness[0][ar6]
+        arange1 = np.arange(1, x+1)
+        arange2 = np.arange(x+1, 2 * x+1)
+        arange3 = np.arange(2 * x+1, 3 * x+1)
+        arange4 = np.arange(3 * x+1, 4 * x+1)
+        arange5 = np.arange(4 * x+1, 5 * x+1)
+        arange6 = np.arange(5 * x+1, 6 * x+1)
+
+        # plt.subplot(2, 3)
         plt.grid(axis='both')
         plt.title("Зависимость информативности от расстояния смежности")
-        plt.plot(head, self.informativeness[0],marker='o')
+        plt.plot(arange1, df1,marker='o',color='red')
+        plt.plot(arange2, df2,marker='o',color='green')
+        plt.plot(arange3, df3, marker='o', color='blue')
+        plt.plot(arange4, df4, marker='o', color='yellow')
+        plt.plot(arange5, df5, marker='o', color='orange')
+        plt.plot(arange6, df6, marker='o', color='purple')
+
+        self.Anglelegend = ['Контраст','Несходство','Локальная однородность','Угловой второй момент','Энергия','Корреляция']
+        plt.figlegend(self.Anglelegend)
         plt.show()
+
 
     def informativ2(self): # Вычисление и отображение информативности признаков по отдельности
         np.set_printoptions(edgeitems=100000)
@@ -535,12 +751,12 @@ class MyWindow(QtWidgets.QMainWindow):
         self.rass= self.spinBox.value() # Расстояние смежности
         self.rassinapravlenie=4*self.rass # Расстояние смежности * 4 направления
         # Загрузка данных
-        features = pd.read_csv('glcm_train1.csv', delimiter=';')
+        features = pd.read_csv('glcm_train0.csv', delimiter=';')
         del features['0']
         print(features)
         mean1 = features.describe().loc[['mean']]
         std1 = features.describe().loc[['std']]
-        features = pd.read_csv('glcm_train2.csv', delimiter=';')
+        features = pd.read_csv('glcm_train1.csv', delimiter=';')
         del features['0']
         mean2 = features.describe().loc[['mean']]
         std2 = features.describe().loc[['std']]
@@ -692,24 +908,24 @@ class MyWindow(QtWidgets.QMainWindow):
     def SVM(self): # Классификатор опорных векторов
 
         # Загрузка обучающей выборки
-        blasts = pd.read_csv("glcm_train1.csv", delimiter=';')
-        blasts = blasts.drop(columns=blasts.columns[0])
-        blasts["class"] = 0
-        lymphocytes = pd.read_csv("glcm_train2.csv", delimiter=';')
-        lymphocytes = lymphocytes.drop(columns=lymphocytes.columns[0])
-        lymphocytes["class"] = 1
-        cells = pd.concat([blasts, lymphocytes])
+        cell1 = pd.read_csv("glcm_train0.csv", delimiter=';')
+        cell1 = cell1.drop(columns=cell1.columns[0])
+        cell1["class"] = 0
+        cell2 = pd.read_csv("glcm_train1.csv", delimiter=';')
+        cell2 = cell2.drop(columns=cell2.columns[0])
+        cell2["class"] = 1
+        cells = pd.concat([cell1,cell2])
         cells = cells.apply(lambda x: pd.to_numeric(x.astype(str).str.replace(',', '.'), errors='coerce'))
         print(cells)
 
         # Загрузка тестовой выборки
-        test_blasts = pd.read_csv("glcm_test1.csv", delimiter=';')
-        test_blasts = test_blasts.drop(columns=test_blasts.columns[0])
-        test_blasts["class"] = 0
-        test_lymphocytes = pd.read_csv("glcm_test2.csv", delimiter=';')
-        test_lymphocytes = test_lymphocytes.drop(columns=test_lymphocytes.columns[0])
-        test_lymphocytes["class"] = 1
-        test_cells = pd.concat([test_blasts, test_lymphocytes])
+        test_cell1 = pd.read_csv("glcm_test0.csv", delimiter=';')
+        test_cell1 = test_cell1.drop(columns=test_cell1.columns[0])
+        test_cell1["class"] = 0
+        test_cell2 = pd.read_csv("glcm_test1.csv", delimiter=';')
+        test_cell2 = test_cell2.drop(columns=test_cell2.columns[0])
+        test_cell2["class"] = 1
+        test_cells = pd.concat([test_cell1, test_cell2])
         test_cells = test_cells.apply(lambda x: pd.to_numeric(x.astype(str).str.replace(',', '.'), errors='coerce'))
 
         # Соединение и преобразование выборок
@@ -787,125 +1003,19 @@ class MyWindow(QtWidgets.QMainWindow):
     #     self.ui.results.setNum(res[0] + 1)  # отображение номера класса
     #     self.show()  # показать на интерфейсе все значения
 
-    def NN(self):
-        dataset_url = "C:\\Users\\bulig\\.keras\\datasets\\flower_photos"
-        data_dir = tf.keras.utils.get_file('flower_photos', origin=dataset_url, untar=True)
-        data_dir = pathlib.Path(data_dir)
-        image_count = len(list(data_dir.glob('*/*.bmp')))
-        print(image_count)
-        print(data_dir)
-
-        batch_size = 32
-        img_height = 200
-        img_width = 200
-        train_ds = tf.keras.preprocessing.image_dataset_from_directory(
-            data_dir,
-            validation_split=0.2,
-            subset="training",
-            seed=123,
-            image_size=(img_height, img_width),
-            batch_size=batch_size)
-        val_ds = tf.keras.preprocessing.image_dataset_from_directory(
-            data_dir,
-            validation_split=0.2,
-            subset="validation",
-            seed=123,
-            image_size=(img_height, img_width),
-            batch_size=batch_size)
-        class_names = train_ds.class_names
-        np.set_printoptions(edgeitems=10000)
-        print(class_names)
-        print(train_ds)
-        # plt.figure(figsize=(5, 4))
-        # for images, labels in train_ds.take(1):
-        #     for i in range(9):
-        #         ax = plt.subplot(3, 3, i + 1)
-        #         plt.imshow(images[i].numpy().astype("uint8"))
-        #         plt.title(class_names[labels[i]])
-        #         plt.axis("off")
-        for image_batch, labels_batch in train_ds:
-            print(image_batch.shape)
-            print(labels_batch.shape)
-            break
-        AUTOTUNE = tf.data.AUTOTUNE
-        train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=AUTOTUNE)
-        val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
-        normalization_layer = layers.experimental.preprocessing.Rescaling(1. / 255)
-        print(train_ds)
-        print(normalization_layer)
-        data_augmentation = keras.Sequential(
-            [
-                layers.experimental.preprocessing.RandomFlip("horizontal",
-                                                             input_shape=(img_height,
-                                                                          img_width,
-                                                                          3)),
-                layers.experimental.preprocessing.RandomRotation(0.1),
-                layers.experimental.preprocessing.RandomZoom(0.1),
-            ]
-        )
-        # for images, _ in train_ds.take(1):
-        #     for i in range(9):
-        #         augmented_images = data_augmentation(images)
-        #         ax = plt.subplot(3, 3, i + 1)
-        #         plt.imshow(augmented_images[0].numpy().astype("uint8"))
-        #         plt.axis("off")
-        #         plt.show()
-        # create_model
-        num_classes = 2
-        model = Sequential([
-            data_augmentation,
-            layers.experimental.preprocessing.Rescaling(1. / 255),
-            layers.Conv2D(16, 3, padding='same', activation='relu'),
-            layers.MaxPooling2D(),
-            layers.Conv2D(32, 3, padding='same', activation='relu'),
-            layers.MaxPooling2D(),
-            layers.Conv2D(64, 3, padding='same', activation='relu'),
-            layers.MaxPooling2D(),
-            layers.Dropout(0.2),
-            layers.Flatten(),
-            layers.Dense(128, activation='relu'),
-            layers.Dense(num_classes)
-        ])
-
-        # compile
-        model.compile(optimizer='adam',
-                      loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                      metrics=['accuracy'])
-
-        # description
-        model.summary()
-        callback = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=3)
-        # education
-        epochs = 9
-        history = model.fit(
-            train_ds,
-            validation_data=val_ds,
-            epochs=epochs,
-        )
-        # vizualize_Results
-        acc = history.history['accuracy']
-        val_acc = history.history['val_accuracy']
-        loss = history.history['loss']
-        val_loss = history.history['val_loss']
-        epochs_range = range(epochs)
-        plt.figure(figsize=(8, 8))
-        plt.subplot(1, 2, 1)
-        plt.plot(epochs_range, acc, label='Training Accuracy')
-        plt.plot(epochs_range, val_acc, label='Validation Accuracy')
-        plt.legend(loc='lower right')
-        plt.title('Training and Validation Accuracy')
-        plt.subplot(1, 2, 2)
-        plt.plot(epochs_range, loss, label='Training Loss')
-        plt.plot(epochs_range, val_loss, label='Validation Loss')
-        plt.legend(loc='upper right')
-        plt.title('Training and Validation Loss')
-        plt.show()
-        print('Точность обучающей',acc)
-        print('Точность тестовой', val_acc)
-        print('Ошибка обучающей', loss)
-        print('Ошибка тестовой', val_loss)
-
-
+    # def ISIC(self):
+    #     train = pd.read_csv('ISIC_train.csv')
+    #     test = pd.read_csv('ISIC_test.csv')
+    #     print('Train: ', train.shape)
+    #     print("Test:", test.shape)
+    #     print(train.head())
+    #     print(train.info())
+    #     print(test.head())
+    #     print(test.info())
+    #     print(train['benign_malignant'].value_counts(normalize=True))
+    #     a=train.sort_values(by = 'benign_malignant', ascending=False)
+    #     a=a[a.target == 1]
+    #     print(a)
 
 
 if __name__ == '__main__':
